@@ -208,7 +208,7 @@ def handle_queue(orchestrator_connection: OrchestratorConnection):
             orchestrator_connection.log_info(f"MBA: Sending mail to {data['email']}")
             send_mails_to_supervisor(data)
             orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.DONE)
-        except:
+        except Exception:
             orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.FAILED)
             raise
 
@@ -219,6 +219,6 @@ def handle_queue(orchestrator_connection: OrchestratorConnection):
             orchestrator_connection.log_info(f"MBA: Sending mail to {data['email']}")
             send_mails_to_employee(data)
             orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.DONE)
-        except:
+        except Exception:
             orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.FAILED)
             raise

@@ -202,7 +202,7 @@ def handle_queue(orchestrator_connection: OrchestratorConnection, kombit_access:
             orchestrator_connection.log_info(f"MSO: Sending mail to {data['email']}")
             send_mail_to_supervisor(data)
             orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.DONE)
-        except:
+        except Exception:
             orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.FAILED)
             raise
 
@@ -213,6 +213,6 @@ def handle_queue(orchestrator_connection: OrchestratorConnection, kombit_access:
             orchestrator_connection.log_info(f"MSO: Sending Digital Post to {data['cpr']}")
             send_digital_post_to_employee(data["cpr"], data["name"], kombit_access)
             orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.DONE)
-        except:
+        except Exception:
             orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.FAILED)
             raise
