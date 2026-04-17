@@ -1,3 +1,5 @@
+"""This module contains the process for MBA."""
+
 import calendar
 from datetime import date
 import json
@@ -54,8 +56,8 @@ def get_people(start_date: date, end_date: date) -> list[Supervisor]:
     connection = pyodbc.connect("Server=FaellesSQL;Database=Personale;Trusted_Connection=yes;Driver={ODBC Driver 17 for SQL Server}")
     cursor = connection.cursor()
 
-    cursor.execute("""
-        SELECT
+    cursor.execute(
+        """SELECT
             a.CPR,
             a.Tjenestenummer,
             a.Email,
@@ -69,19 +71,18 @@ def get_people(start_date: date, end_date: date) -> list[Supervisor]:
         JOIN [ORG].[LØN].[LønOrgEnhed_Aktuel] AS c ON a.Afdeling = c.SdAfdId
         JOIN [ORG].[adm].[OrgEnhed_Aktuel_Leder] AS d ON b.FungPersLederBrugerNavn = d.LederBrugernavn
 
-        WHERE 
+        WHERE
             a.PrimærAnsættelse_Aktuel = 1
             AND a.Deltidsbeskæftigelseskode IN (0, 1)
             AND c.MagAfdID = 'BA'
             AND CONVERT(date, STUFF(STUFF(SUBSTRING(a.CPR, 1, 6), 5, 0, '.'), 3, 0, '.'), 4) BETWEEN ? AND ?""",
-
         start_date,
         end_date
     )
 
     supervisors: dict[str, Supervisor] = {}
     for row in cursor:
-        cpr, employee_number, email, occupation, supervisor_name, name, supervisor_email = row  # TODO: Mail?
+        cpr, employee_number, email, occupation, supervisor_name, name, supervisor_email = row
 
         if supervisor_email not in supervisors:
             supervisors[supervisor_email] = Supervisor(supervisor_name, supervisor_email)
@@ -126,7 +127,7 @@ def send_mails_to_supervisor(supervisor: dict):
         )
 
         smtp_util.send_email(
-            receiver="ghbm@aarhus.dk", # TODO: receiver=supervisor["email"],
+            receiver=supervisor["email"],
             sender=config.MBA_MAIL_SENDER,
             subject="Din medarbejder skal indkaldes til seniorsamtale",
             body=mail_text,
@@ -155,7 +156,7 @@ def send_mails_to_employee(employee: dict):
     )
 
     smtp_util.send_email(
-        receiver="ghbm@aarhus.dk", # TODO: receiver=employee["email"],
+        receiver=employee["email"],
         sender=config.MBA_MAIL_SENDER,
         subject="Tilbud om seniorsamtale",
         body=mail_text,

@@ -1,6 +1,8 @@
+"""This module contains the process for MSO."""
+
 import base64
 import calendar
-from datetime import date, timedelta
+from datetime import date
 import json
 
 import pyodbc
@@ -54,30 +56,30 @@ def get_people(start_date: date, end_date: date) -> list[Supervisor]:
     connection = pyodbc.connect("Server=FaellesSQL;Database=Personale;Trusted_Connection=yes;Driver={ODBC Driver 17 for SQL Server}")
     cursor = connection.cursor()
 
-    cursor.execute("""
-        SELECT 
-            a.[CPR], 
-            a.[Tjenestenummer], a.Email, a.[Stilling],
-			b.[FungPersLederKaldeNavn], b.[KaldeNavn], 
+    cursor.execute(
+        """
+        SELECT
+            a.[CPR],
+            a.[Tjenestenummer], a.[Stilling],
+            b.[FungPersLederKaldeNavn], b.[KaldeNavn],
             d.[FungerendeLederEmail]
-        FROM 
+        FROM
             [Personale].[sd_magistrat].[Ansættelse_udvidet_alle] AS a
             JOIN [ORG].[adm].[Bruger_Personaleleder] AS b ON a.Brugernavn = b.Brugernavn
             JOIN [ORG].[LØN].[LønOrgEnhed_Aktuel] AS c ON a.afdeling = c.SdAfdId
             JOIN [ORG].[adm].[OrgEnhed_Aktuel_Leder] AS d ON b.[FungPersLederBrugerNavn]=d.[LederBrugernavn]
-        WHERE 
-            a.PrimærAnsættelse_Aktuel = 1 
+        WHERE
+            a.PrimærAnsættelse_Aktuel = 1
             AND a.Deltidsbeskæftigelseskode IN(0,1)
-            AND c.MagAfdID='MSO' 
+            AND c.MagAfdID='MSO'
             AND CONVERT(datetime, STUFF(STUFF(SUBSTRING(a.CPR,0,7),5,0,'.'),3,0,'.'), 4) BETWEEN ? AND ?""",
-
         start_date,
         end_date
     )
 
     supervisors: dict[str, Supervisor] = {}
     for row in cursor:
-        cpr, employee_number, email, occupation, supervisor_name, name, supervisor_email = row  # TODO: Mail?
+        cpr, employee_number, occupation, supervisor_name, name, supervisor_email = row
 
         if supervisor_email not in supervisors:
             supervisors[supervisor_email] = Supervisor(supervisor_name, supervisor_email)
@@ -96,6 +98,7 @@ def get_people(start_date: date, end_date: date) -> list[Supervisor]:
 
 
 def send_mail_to_supervisor(supervisor: dict):
+    """Send an email to the given supervisor."""
     with open("message_texts/mso/mso_supervisor_email_text.html", encoding="utf-8") as file:
         mail_text = file.read()
 
@@ -108,7 +111,7 @@ def send_mail_to_supervisor(supervisor: dict):
     )
 
     smtp_util.send_email(
-        receiver="ghbm@aarhus.dk", # TODO: receiver=supervisor["email"],
+        receiver=supervisor["email"],
         sender=config.MSO_MAIL_SENDER,
         subject="Din medarbejder skal indkaldes til seniorsamtale",
         body=mail_text,
@@ -131,7 +134,7 @@ def send_digital_post_to_employee(cpr: str, name: str, kombit_access: KombitAcce
 
     letter_text = (
         letter_text
-        .replace("{{Navn}}", str(hash(name)))  # TODO
+        .replace("{{Navn}}", name)
         .replace("{{År}}", str(cpr_util.get_age(cpr)))
     )
 
@@ -143,7 +146,7 @@ def send_digital_post_to_employee(cpr: str, name: str, kombit_access: KombitAcce
             label="Aarhus Kommune"
         ),
         recipient=Recipient(
-            recipientID="2611740000", # TODO: recipientID=cpr,
+            recipientID=cpr,
             idType="CPR"
         ),
         files=[
@@ -160,6 +163,9 @@ def send_digital_post_to_employee(cpr: str, name: str, kombit_access: KombitAcce
 
 
 def append_queue(orchestrator_connection: OrchestratorConnection):
+    """Search for employees and supervisors who should be notified and
+    and them to the job queue.
+    """
     start_date, end_date = get_period()
     supervisors = get_people(start_date, end_date)
 
@@ -174,12 +180,12 @@ def append_queue(orchestrator_connection: OrchestratorConnection):
             )
 
         for employee in supervisor.employees:
-                if not orchestrator_connection.get_queue_elements(config.MSO_QUEUE_EMPLOYEE, reference=employee.cpr):
-                    orchestrator_connection.create_queue_element(
-                        queue_name=config.MSO_QUEUE_EMPLOYEE,
-                        reference=employee.cpr,
-                        data=json.dumps(employee.to_dict(), ensure_ascii=False)
-                    )
+            if not orchestrator_connection.get_queue_elements(config.MSO_QUEUE_EMPLOYEE, reference=employee.cpr):
+                orchestrator_connection.create_queue_element(
+                    queue_name=config.MSO_QUEUE_EMPLOYEE,
+                    reference=employee.cpr,
+                    data=json.dumps(employee.to_dict(), ensure_ascii=False)
+                )
 
 
 def handle_queue(orchestrator_connection: OrchestratorConnection, kombit_access: KombitAccess):

@@ -31,4 +31,3 @@ MSO_QUEUE_SUPERVISOR = "MSO_Senioradvisering_leder"
 
 MBA_QUEUE_EMPLOYEE = "MBA_Senioradvisering_medarbejder"
 MBA_QUEUE_SUPERVISOR = "MBA_Senioradvisering_leder"
-

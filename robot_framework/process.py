@@ -55,7 +55,6 @@ def get_kombit_access(orchestrator_connection: OrchestratorConnection) -> Kombit
     return KombitAccess("55133018", certificate_path)
 
 
-
 if __name__ == '__main__':
     conn_string = os.getenv("OpenOrchestratorConnString")
     crypto_key = os.getenv("OpenOrchestratorKey")

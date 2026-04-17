@@ -1,17 +1,19 @@
+"""This module contains the process for MBU."""
+
 import base64
 from datetime import date
 import calendar
 from io import BytesIO
 import json
 
-from OpenOrchestrator.orchestrator_connection.connection import OrchestratorConnection
 import pyodbc
+from OpenOrchestrator.orchestrator_connection.connection import OrchestratorConnection
+from OpenOrchestrator.database.queues import QueueStatus
 from python_serviceplatformen.models.message import create_digital_post_with_main_document, Sender, Recipient, File
 from python_serviceplatformen import digital_post
 from python_serviceplatformen.authentication import KombitAccess
 from itk_dev_shared_components.smtp import smtp_util
 from itk_dev_shared_components.misc import cpr_util
-from OpenOrchestrator.database.queues import QueueStatus
 
 from robot_framework import config
 from robot_framework.sub_process.models import Supervisor, Employee
@@ -60,7 +62,8 @@ def get_people(start_date: date, end_date: date) -> list[Supervisor]:
     connection = pyodbc.connect("Server=FaellesSQL;Database=Personale;Trusted_Connection=yes;Driver={ODBC Driver 17 for SQL Server}")
     cursor = connection.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT DISTINCT
             a.[CPR], a.[Tjenestenummer], a.[Stilling],
             b.[FungPersLederKaldeNavn], b.[KaldeNavn],
@@ -72,7 +75,7 @@ def get_people(start_date: date, end_date: date) -> list[Supervisor]:
             Join [ORG].[adm].[OrgEnhed_Aktuel_Leder]            AS d ON b.[FungPersLederBrugerNavn] = d.[LederBrugernavn]
             Join [Personale].[sd_magistrat].[Ansættelse_alle]   AS e ON a.[AnsættelsesId] = e.[AnsættelsesId]
 
-        Where a.PrimærAnsættelse_Aktuel = 1 
+        Where a.PrimærAnsættelse_Aktuel = 1
             AND a.Deltidsbeskæftigelseskode IN(0,1)
             AND a.Institutionskode in ('XA','XD')
             AND e.Overenskomst IN(46001, 46002, 46101, 76001, 76101, 46004, 46901)
@@ -129,7 +132,7 @@ def send_mail_to_supervisor(supervisor: dict):
     attachment = smtp_util.EmailAttachment(file=pdf_bytes, file_name="Den gode seniorsamtale_Advis_leder.pdf")
 
     smtp_util.send_email(
-        receiver="ghbm@aarhus.dk", # TODO: receiver=supervisor["email"],
+        receiver=supervisor["email"],
         sender=config.MBU_MAIL_SENDER,
         subject="Din medarbejder skal indkaldes til seniorsamtale",
         body=mail_text,
@@ -153,7 +156,7 @@ def send_digital_post_to_employee(cpr: str, name: str, kombit_access: KombitAcce
 
     letter_text = (
         letter_text
-        .replace("{{Navn}}", str(hash(name)))  # TODO
+        .replace("{{Navn}}", name)
         .replace("{{År}}", str(cpr_util.get_age(cpr)))
     )
 
@@ -165,7 +168,7 @@ def send_digital_post_to_employee(cpr: str, name: str, kombit_access: KombitAcce
             label="Aarhus Kommune"
         ),
         recipient=Recipient(
-            recipientID="2611740000", # TODO: recipientID=cpr,
+            recipientID=cpr,
             idType="CPR"
         ),
         files=[
