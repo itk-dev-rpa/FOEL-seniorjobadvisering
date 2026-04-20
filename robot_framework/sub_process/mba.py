@@ -7,12 +7,12 @@ import json
 import pyodbc
 
 from itk_dev_shared_components.misc import cpr_util
-from itk_dev_shared_components.smtp import smtp_util
 from OpenOrchestrator.orchestrator_connection.connection import OrchestratorConnection
 from OpenOrchestrator.database.queues import QueueStatus
 
 from robot_framework import config
 from robot_framework.sub_process.models import Supervisor, Employee
+from robot_framework.sub_process.senders.email_sender import EmailSender, EmailConfig
 
 
 def get_period(age: int) -> tuple[date, date]:
@@ -108,32 +108,26 @@ def send_mails_to_supervisor(supervisor: dict):
     Args:
         supervisor: A dictionary as made by Supervisor.to_dict_mba.
     """
-    with open("message_texts/mba/mail_supervisor_under_63.html", encoding="utf-8") as file:
-        mail_text_under_63 = file.read()
-
-    with open("message_texts/mba/mail_supervisor_over_63.html", encoding="utf-8") as file:
-        mail_text_over_63 = file.read()
+    email = EmailSender(EmailConfig(smtp_server=config.SMTP_SERVER, smtp_port=config.SMTP_PORT))
 
     for employee in supervisor["employees"]:
+        # Choose template based on age (<63 vs >=63) – same as before
         if employee["age"] < 63:
-            mail_text = mail_text_under_63
+            template_path = "message_texts/mba/mail_supervisor_under_63.html"
         else:
-            mail_text = mail_text_over_63
+            template_path = "message_texts/mba/mail_supervisor_over_63.html"
 
-        mail_text = (
-            mail_text
-            .replace("{{LederNavn}}", supervisor["name"])
-            .replace("{{MedarbejderNavn}}", employee["name"])
-        )
+        context = {
+            "LederNavn": supervisor["name"],
+            "MedarbejderNavn": employee["name"],
+        }
 
-        smtp_util.send_email(
+        email.send_from_template(
+            template_path=template_path,
+            context=context,
             receiver=supervisor["email"],
             sender=config.MBA_MAIL_SENDER,
             subject="Din medarbejder skal indkaldes til seniorsamtale",
-            body=mail_text,
-            html_body=True,
-            smtp_port=config.SMTP_PORT,
-            smtp_server=config.SMTP_SERVER
         )
 
 
@@ -143,26 +137,24 @@ def send_mails_to_employee(employee: dict):
     Args:
         supervisor: A dictionary as made by Employee.to_dict.
     """
+    email = EmailSender(EmailConfig(smtp_server=config.SMTP_SERVER, smtp_port=config.SMTP_PORT))
+
+    # Choose template based on age (<63 vs >=63) – same as before
     if cpr_util.get_age(employee["cpr"]) < 63:
-        with open("message_texts/mba/mail_employee_under_63.html", encoding="utf-8") as file:
-            mail_text = file.read()
+        template_path = "message_texts/mba/mail_employee_under_63.html"
     else:
-        with open("message_texts/mba/mail_employee_over_63.html", encoding="utf-8") as file:
-            mail_text = file.read()
+        template_path = "message_texts/mba/mail_employee_over_63.html"
 
-    mail_text = (
-        mail_text
-        .replace("{{Navn}}", employee["name"])
-    )
+    context = {
+        "Navn": employee["name"],
+    }
 
-    smtp_util.send_email(
+    email.send_from_template(
+        template_path=template_path,
+        context=context,
         receiver=employee["email"],
         sender=config.MBA_MAIL_SENDER,
         subject="Tilbud om seniorsamtale",
-        body=mail_text,
-        html_body=True,
-        smtp_port=config.SMTP_PORT,
-        smtp_server=config.SMTP_SERVER
     )
 
 
