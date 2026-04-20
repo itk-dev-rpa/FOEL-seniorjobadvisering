@@ -213,6 +213,76 @@ class MbuStrategy(FlowStrategy):
         return dict(n.render_context)
 
 
+class MsoStrategy(FlowStrategy):
+    flow = Flow.MSO
+
+    def select_periods(self) -> list[tuple[date, date]]:
+        from robot_framework.sub_process.mso import get_period  # local import
+        return [get_period()]
+
+    def find_people(self, start_date: date, end_date: date) -> list[Supervisor]:
+        from robot_framework.sub_process.mso import get_people  # local import
+        return get_people(start_date, end_date)
+
+    def plan_notifications(self, supervisors: Iterable[Supervisor]) -> list[Notification]:
+        notifications: list[Notification] = []
+        for s in supervisors:
+            employees_strings = [e.to_mail_string() for e in s.employees]
+            notifications.append(
+                Notification(
+                    flow=self.flow,
+                    recipient=Recipient(
+                        audience=Audience.SUPERVISOR,
+                        channel=Channel.EMAIL,
+                        address=s.email,
+                    ),
+                    template_id="mso_supervisor_email",
+                    render_context={
+                        "name": s.name,
+                        "email": s.email,
+                        "employees": employees_strings,
+                    },
+                    reference=f"{s.email}",
+                    queue_name=getattr(config, "MSO_QUEUE_SUPERVISOR"),
+                )
+            )
+            for e in s.employees:
+                notifications.append(
+                    Notification(
+                        flow=self.flow,
+                        recipient=Recipient(
+                            audience=Audience.EMPLOYEE,
+                            channel=Channel.DIGITAL_POST,
+                            address=e.cpr,
+                        ),
+                        template_id="mso_employee_digital_post",
+                        render_context={
+                            "cpr": e.cpr,
+                            "name": e.name,
+                            "email": e.email,
+                        },
+                        reference=e.cpr,
+                        queue_name=getattr(config, "MSO_QUEUE_EMPLOYEE"),
+                    )
+                )
+        return notifications
+
+    def serialize(self, n: Notification) -> dict:
+        if n.queue_name == getattr(config, "MSO_QUEUE_SUPERVISOR"):
+            return {
+                "name": n.render_context.get("name"),
+                "email": n.render_context.get("email"),
+                "employees": list(n.render_context.get("employees", [])),
+            }
+        if n.queue_name == getattr(config, "MSO_QUEUE_EMPLOYEE"):
+            return {
+                "cpr": n.render_context.get("cpr"),
+                "name": n.render_context.get("name"),
+                "email": n.render_context.get("email"),
+            }
+        return dict(n.render_context)
+
+
 def known_queues_for(flow: Flow) -> tuple[str, ...]:
     if flow is Flow.MBA:
         return (config.MBA_QUEUE_SUPERVISOR, config.MBA_QUEUE_EMPLOYEE)

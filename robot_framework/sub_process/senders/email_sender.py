@@ -41,6 +41,7 @@ class EmailSender:
         receiver: str,
         sender: str,
         subject: str,
+        attachments: list | None = None,
     ) -> None:
         html = self._render_template(template_path, context)
         smtp_util.send_email(
@@ -49,6 +50,7 @@ class EmailSender:
             subject=subject,
             body=html,
             html_body=True,
+            attachments=attachments,
             smtp_port=self._config.smtp_port,
             smtp_server=self._config.smtp_server,
         )

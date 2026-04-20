@@ -17,6 +17,8 @@ from itk_dev_shared_components.misc import cpr_util
 
 from robot_framework import config
 from robot_framework.sub_process.models import Supervisor, Employee
+from robot_framework.sub_process.senders.email_sender import EmailSender, EmailConfig
+from robot_framework.sub_process.senders.digital_post_sender import DigitalPostSender
 
 
 def get_period() -> tuple[date, date]:
@@ -115,31 +117,28 @@ def send_mail_to_supervisor(supervisor: dict):
     Args:
         supervisor: A dictionary as made by Supervisor.to_dict.
     """
-    with open("message_texts/mbu/mbu_supervisor_email_text.html", encoding="utf-8") as file:
-        mail_text = file.read()
+    # Render HTML from existing template using EmailSender (parity with previous logic)
+    email = EmailSender(EmailConfig(smtp_server=config.SMTP_SERVER, smtp_port=config.SMTP_PORT))
 
+    # Build the HTML list items for employees and pass as a single string to template
     employee_strings = [f"<li>{w}</li>" for w in supervisor["employees"]]
+    context = {
+        "LederNavn": supervisor["name"],
+        "MedarbejderNavne": "\n".join(employee_strings),
+    }
 
-    mail_text = (
-        mail_text
-        .replace("{{LederNavn}}", supervisor["name"])
-        .replace("{{MedarbejderNavne}}", "\n".join(employee_strings))
-    )
-
+    # Prepare PDF attachment identical to previous behavior
     with open("message_texts/attachments/Den gode seniorsamtale_Advis_leder.pdf", "rb") as pdf_file:
         pdf_bytes = BytesIO(pdf_file.read())
-
     attachment = smtp_util.EmailAttachment(file=pdf_bytes, file_name="Den gode seniorsamtale_Advis_leder.pdf")
 
-    smtp_util.send_email(
+    email.send_from_template(
+        template_path="message_texts/mbu/mbu_supervisor_email_text.html",
+        context=context,
         receiver=supervisor["email"],
         sender=config.MBU_MAIL_SENDER,
         subject="Din medarbejder skal indkaldes til seniorsamtale",
-        body=mail_text,
-        html_body=True,
         attachments=[attachment],
-        smtp_port=config.SMTP_PORT,
-        smtp_server=config.SMTP_SERVER
     )
 
 
@@ -151,37 +150,21 @@ def send_digital_post_to_employee(cpr: str, name: str, kombit_access: KombitAcce
         name: Name of the employee
         kombit_access: KombitAccess object used for authentication.
     """
-    with open("message_texts/mbu/mbu_digital_post.html", encoding="utf-8") as file:
-        letter_text = file.read()
+    sender = Sender(senderID="55133018", idType="CVR", label="Aarhus Kommune")
+    context = {
+        "Navn": name,
+        "År": str(cpr_util.get_age(cpr)),
+    }
 
-    letter_text = (
-        letter_text
-        .replace("{{Navn}}", name)
-        .replace("{{År}}", str(cpr_util.get_age(cpr)))
+    dp = DigitalPostSender()
+    dp.send_from_template(
+        template_path="message_texts/mbu/mbu_digital_post.html",
+        context=context,
+        recipient_cpr=cpr,
+        sender=sender,
+        subject="Tilbud om seniorsamtale",
+        kombit_access=kombit_access,
     )
-
-    message = create_digital_post_with_main_document(
-        label="Tilbud om seniorsamtale",
-        sender=Sender(
-            senderID="55133018",
-            idType="CVR",
-            label="Aarhus Kommune"
-        ),
-        recipient=Recipient(
-            recipientID=cpr,
-            idType="CPR"
-        ),
-        files=[
-            File(
-                encodingFormat="text/html",
-                filename="Besked.html",
-                language="da",
-                content=base64.b64encode(letter_text.encode()).decode()
-            )
-        ]
-    )
-
-    digital_post.send_message(message_type="Digital Post", message=message, kombit_access=kombit_access)
 
 
 def append_queue(orchestrator_connection: OrchestratorConnection):
@@ -195,29 +178,16 @@ def append_queue(orchestrator_connection: OrchestratorConnection):
         orchestrator_connection: The connection to orchestrator.
     """
     from robot_framework.sub_process.strategies import MbuStrategy
+    from robot_framework.sub_process.orchestration import append_via_strategy
 
     strategy = MbuStrategy()
 
-    for start_date, end_date in strategy.select_periods():
-        supervisors = strategy.find_people(start_date, end_date)
-        notifications = strategy.plan_notifications(supervisors)
+    def format_reference(n, start_date):
+        if n.queue_name == config.MBU_QUEUE_SUPERVISOR:
+            return f"{n.recipient.address} - {start_date.strftime('%d/%m/%Y')}"
+        return n.reference
 
-        for n in notifications:
-            payload = json.dumps(strategy.serialize(n), ensure_ascii=False)
-            queue_name = n.queue_name
-
-            # Preserve historical reference format for supervisors: "<email> - <dd/mm/YYYY>"
-            if queue_name == config.MBU_QUEUE_SUPERVISOR:
-                reference = f"{n.recipient.address} - {start_date.strftime('%d/%m/%Y')}"
-            else:
-                reference = n.reference
-
-            if not orchestrator_connection.get_queue_elements(queue_name, reference=reference):
-                orchestrator_connection.create_queue_element(
-                    queue_name=queue_name,
-                    reference=reference,
-                    data=payload,
-                )
+    append_via_strategy(orchestrator_connection, strategy, format_reference)
 
 
 def handle_queue(orchestrator_connection: OrchestratorConnection, kombit_access: KombitAccess):
@@ -227,24 +197,30 @@ def handle_queue(orchestrator_connection: OrchestratorConnection, kombit_access:
         orchestrator_connection: The connection to orchestrator.
         kombit_access: KombitAccess object used for authentication.
     """
-    # Handle supervisor emails
-    while queue_element := orchestrator_connection.get_next_queue_element(config.MBU_QUEUE_SUPERVISOR):
-        try:
-            data = json.loads(queue_element.data)
-            orchestrator_connection.log_info(f"MBU: Sending mail to {data['email']}")
-            send_mail_to_supervisor(data)
-            orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.DONE)
-        except Exception:
-            orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.FAILED)
-            raise
+    from robot_framework.sub_process.orchestration import process_queue
 
-    # Handle employee Digital Post
-    while queue_element := orchestrator_connection.get_next_queue_element(config.MBU_QUEUE_EMPLOYEE):
-        try:
-            data = json.loads(queue_element.data)
-            orchestrator_connection.log_info(f"MBU: Sending Digital Post to {data['cpr']}")
-            send_digital_post_to_employee(data["cpr"], data["name"], kombit_access)
-            orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.DONE)
-        except Exception:
-            orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.FAILED)
-            raise
+    # Handle supervisor emails (unified logging)
+    process_queue(
+        orchestrator_connection,
+        queue_name=config.MBU_QUEUE_SUPERVISOR,
+        handle_item=lambda d: send_mail_to_supervisor(d),
+        flow_label="MBU",
+        extract_meta=lambda d: (
+            "email",
+            d.get("email", "n/a"),
+            "message_texts/mbu/mbu_supervisor_email_text.html",
+        ),
+    )
+
+    # Handle employee Digital Post (unified logging)
+    process_queue(
+        orchestrator_connection,
+        queue_name=config.MBU_QUEUE_EMPLOYEE,
+        handle_item=lambda d: send_digital_post_to_employee(d["cpr"], d["name"], kombit_access),
+        flow_label="MBU",
+        extract_meta=lambda d: (
+            "digital_post",
+            d.get("cpr", "n/a"),
+            "message_texts/mbu/mbu_digital_post.html",
+        ),
+    )

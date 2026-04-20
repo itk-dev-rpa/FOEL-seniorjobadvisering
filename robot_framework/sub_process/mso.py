@@ -1,21 +1,20 @@
 """This module contains the process for MSO."""
 
-import base64
 import calendar
 from datetime import date
 import json
 
 import pyodbc
-from python_serviceplatformen.models.message import create_digital_post_with_main_document, Sender, Recipient, File
-from python_serviceplatformen import digital_post
+from python_serviceplatformen.models.message import Sender
 from python_serviceplatformen.authentication import KombitAccess
-from itk_dev_shared_components.smtp import smtp_util
 from itk_dev_shared_components.misc import cpr_util
 from OpenOrchestrator.orchestrator_connection.connection import OrchestratorConnection
 from OpenOrchestrator.database.queues import QueueStatus
 
 from robot_framework import config
 from robot_framework.sub_process.models import Supervisor, Employee
+from robot_framework.sub_process.senders.email_sender import EmailSender, EmailConfig
+from robot_framework.sub_process.senders.digital_post_sender import DigitalPostSender
 
 
 def get_period() -> tuple[date, date]:
@@ -99,25 +98,20 @@ def get_people(start_date: date, end_date: date) -> list[Supervisor]:
 
 def send_mail_to_supervisor(supervisor: dict):
     """Send an email to the given supervisor."""
-    with open("message_texts/mso/mso_supervisor_email_text.html", encoding="utf-8") as file:
-        mail_text = file.read()
+    email = EmailSender(EmailConfig(smtp_server=config.SMTP_SERVER, smtp_port=config.SMTP_PORT))
 
     employee_strings = [f"<li>{w}</li>" for w in supervisor["employees"]]
+    context = {
+        "LederNavn": supervisor["name"],
+        "MedarbejderNavne": "\n".join(employee_strings),
+    }
 
-    mail_text = (
-        mail_text
-        .replace("{{LederNavn}}", supervisor["name"])
-        .replace("{{MedarbejderNavne}}", "\n".join(employee_strings))
-    )
-
-    smtp_util.send_email(
+    email.send_from_template(
+        template_path="message_texts/mso/mso_supervisor_email_text.html",
+        context=context,
         receiver=supervisor["email"],
         sender=config.MSO_MAIL_SENDER,
         subject="Din medarbejder skal indkaldes til seniorsamtale",
-        body=mail_text,
-        html_body=True,
-        smtp_port=config.SMTP_PORT,
-        smtp_server=config.SMTP_SERVER
     )
 
 
@@ -129,63 +123,44 @@ def send_digital_post_to_employee(cpr: str, name: str, kombit_access: KombitAcce
         name: Name of the employee
         kombit_access: KombitAccess object used for authentication.
     """
-    with open("message_texts/mso/mso_employee_digital_post_text.html", encoding="utf-8") as file:
-        letter_text = file.read()
+    sender = Sender(senderID="55133018", idType="CVR", label="Aarhus Kommune")
+    context = {
+        "Navn": name,
+        "År": str(cpr_util.get_age(cpr)),
+    }
 
-    letter_text = (
-        letter_text
-        .replace("{{Navn}}", name)
-        .replace("{{År}}", str(cpr_util.get_age(cpr)))
+    dp = DigitalPostSender()
+    dp.send_from_template(
+        template_path="message_texts/mso/mso_employee_digital_post_text.html",
+        context=context,
+        recipient_cpr=cpr,
+        sender=sender,
+        subject="Tilbud om seniorsamtale",
+        kombit_access=kombit_access,
     )
-
-    message = create_digital_post_with_main_document(
-        label="Tilbud om seniorsamtale",
-        sender=Sender(
-            senderID="55133018",
-            idType="CVR",
-            label="Aarhus Kommune"
-        ),
-        recipient=Recipient(
-            recipientID=cpr,
-            idType="CPR"
-        ),
-        files=[
-            File(
-                encodingFormat="text/html",
-                filename="Besked.html",
-                language="da",
-                content=base64.b64encode(letter_text.encode()).decode()
-            )
-        ]
-    )
-
-    digital_post.send_message(message_type="Digital Post", message=message, kombit_access=kombit_access)
 
 
 def append_queue(orchestrator_connection: OrchestratorConnection):
-    """Search for employees and supervisors who should be notified and
-    and them to the job queue.
+    """Find people who should be notified and add them to the orchestrator queues.
+
+    Uses the MsoStrategy to plan notifications, while preserving existing
+    queue payloads and reference formats (including period date for
+    supervisor references).
+
+    Args:
+        orchestrator_connection: The connection to orchestrator.
     """
-    start_date, end_date = get_period()
-    supervisors = get_people(start_date, end_date)
+    from robot_framework.sub_process.strategies import MsoStrategy
+    from robot_framework.sub_process.orchestration import append_via_strategy
 
-    for supervisor in supervisors:
-        supervisor_reference = f"{supervisor.email} - {start_date.strftime('%d/%m/%Y')}"
+    strategy = MsoStrategy()
 
-        if not orchestrator_connection.get_queue_elements(config.MSO_QUEUE_SUPERVISOR, reference=supervisor_reference):
-            orchestrator_connection.create_queue_element(
-                queue_name=config.MSO_QUEUE_SUPERVISOR,
-                reference=supervisor_reference,
-                data=json.dumps(supervisor.to_dict(), ensure_ascii=False)
-            )
+    def format_reference(n, start_date):
+        if n.queue_name == config.MSO_QUEUE_SUPERVISOR:
+            return f"{n.recipient.address} - {start_date.strftime('%d/%m/%Y')}"
+        return n.reference
 
-        for employee in supervisor.employees:
-            if not orchestrator_connection.get_queue_elements(config.MSO_QUEUE_EMPLOYEE, reference=employee.cpr):
-                orchestrator_connection.create_queue_element(
-                    queue_name=config.MSO_QUEUE_EMPLOYEE,
-                    reference=employee.cpr,
-                    data=json.dumps(employee.to_dict(), ensure_ascii=False)
-                )
+    append_via_strategy(orchestrator_connection, strategy, format_reference)
 
 
 def handle_queue(orchestrator_connection: OrchestratorConnection, kombit_access: KombitAccess):
@@ -195,24 +170,30 @@ def handle_queue(orchestrator_connection: OrchestratorConnection, kombit_access:
         orchestrator_connection: The connection to orchestrator.
         kombit_access: KombitAccess object used for authentication.
     """
-    # Handle supervisor emails
-    while queue_element := orchestrator_connection.get_next_queue_element(config.MSO_QUEUE_SUPERVISOR):
-        try:
-            data = json.loads(queue_element.data)
-            orchestrator_connection.log_info(f"MSO: Sending mail to {data['email']}")
-            send_mail_to_supervisor(data)
-            orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.DONE)
-        except Exception:
-            orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.FAILED)
-            raise
+    from robot_framework.sub_process.orchestration import process_queue
 
-    # Handle employee Digital Post
-    while queue_element := orchestrator_connection.get_next_queue_element(config.MSO_QUEUE_EMPLOYEE):
-        try:
-            data = json.loads(queue_element.data)
-            orchestrator_connection.log_info(f"MSO: Sending Digital Post to {data['cpr']}")
-            send_digital_post_to_employee(data["cpr"], data["name"], kombit_access)
-            orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.DONE)
-        except Exception:
-            orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.FAILED)
-            raise
+    # Handle supervisor emails (unified logging)
+    process_queue(
+        orchestrator_connection,
+        queue_name=config.MSO_QUEUE_SUPERVISOR,
+        handle_item=lambda d: send_mail_to_supervisor(d),
+        flow_label="MSO",
+        extract_meta=lambda d: (
+            "email",
+            d.get("email", "n/a"),
+            "message_texts/mso/mso_supervisor_email_text.html",
+        ),
+    )
+
+    # Handle employee Digital Post (unified logging)
+    process_queue(
+        orchestrator_connection,
+        queue_name=config.MSO_QUEUE_EMPLOYEE,
+        handle_item=lambda d: send_digital_post_to_employee(d["cpr"], d["name"], kombit_access),
+        flow_label="MSO",
+        extract_meta=lambda d: (
+            "digital_post",
+            d.get("cpr", "n/a"),
+            "message_texts/mso/mso_employee_digital_post_text.html",
+        ),
+    )

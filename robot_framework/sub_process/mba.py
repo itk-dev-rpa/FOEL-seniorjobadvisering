@@ -169,31 +169,16 @@ def append_queue(orchestrator_connection: OrchestratorConnection):
         orchestrator_connection: The connection to orchestrator.
     """
     from robot_framework.sub_process.strategies import MbaStrategy
+    from robot_framework.sub_process.orchestration import append_via_strategy
 
     strategy = MbaStrategy()
 
-    for start_date, end_date in strategy.select_periods():
-        supervisors = strategy.find_people(start_date, end_date)
-        notifications = strategy.plan_notifications(supervisors)
+    def format_reference(n, start_date):
+        if n.queue_name == config.MBA_QUEUE_SUPERVISOR:
+            return f"{n.recipient.address} - {start_date.strftime('%d/%m/%Y')}"
+        return n.reference
 
-        for n in notifications:
-            payload = json.dumps(strategy.serialize(n), ensure_ascii=False)
-            queue_name = n.queue_name
-
-            # Preserve historical reference format for supervisors: "<email> - <dd/mm/YYYY>"
-            if queue_name == config.MBA_QUEUE_SUPERVISOR:
-                # n.recipient.address is supervisor email
-                reference = f"{n.recipient.address} - {start_date.strftime('%d/%m/%Y')}"
-            else:
-                # Employees keep CPR as reference
-                reference = n.reference
-
-            if not orchestrator_connection.get_queue_elements(queue_name, reference=reference):
-                orchestrator_connection.create_queue_element(
-                    queue_name=queue_name,
-                    reference=reference,
-                    data=payload,
-                )
+    append_via_strategy(orchestrator_connection, strategy, format_reference)
 
 
 def handle_queue(orchestrator_connection: OrchestratorConnection):
@@ -202,24 +187,34 @@ def handle_queue(orchestrator_connection: OrchestratorConnection):
     Args:
         orchestrator_connection: The connection to orchestrator.
     """
-    # Handle supervisor emails
-    while queue_element := orchestrator_connection.get_next_queue_element(config.MBA_QUEUE_SUPERVISOR):
-        try:
-            data = json.loads(queue_element.data)
-            orchestrator_connection.log_info(f"MBA: Sending mail to {data['email']}")
-            send_mails_to_supervisor(data)
-            orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.DONE)
-        except Exception:
-            orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.FAILED)
-            raise
+    from robot_framework.sub_process.orchestration import process_queue
 
-    # Handle employee Mails
-    while queue_element := orchestrator_connection.get_next_queue_element(config.MBA_QUEUE_EMPLOYEE):
-        try:
-            data = json.loads(queue_element.data)
-            orchestrator_connection.log_info(f"MBA: Sending mail to {data['email']}")
-            send_mails_to_employee(data)
-            orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.DONE)
-        except Exception:
-            orchestrator_connection.set_queue_element_status(queue_element.id, status=QueueStatus.FAILED)
-            raise
+    # Handle supervisor emails (unified logging)
+    process_queue(
+        orchestrator_connection,
+        queue_name=config.MBA_QUEUE_SUPERVISOR,
+        handle_item=lambda d: send_mails_to_supervisor(d),
+        flow_label="MBA",
+        extract_meta=lambda d: (
+            "email",
+            d.get("email", "n/a"),
+            "message_texts/mba/mail_supervisor_{age_bucket}.html".format(
+                age_bucket="mixed_by_age"
+            ),
+        ),
+    )
+
+    # Handle employee emails (unified logging)
+    process_queue(
+        orchestrator_connection,
+        queue_name=config.MBA_QUEUE_EMPLOYEE,
+        handle_item=lambda d: send_mails_to_employee(d),
+        flow_label="MBA",
+        extract_meta=lambda d: (
+            "email",
+            d.get("email", "n/a"),
+            "message_texts/mba/mail_employee_{}63.html".format(
+                "under_" if cpr_util.get_age(d.get("cpr", "")) < 63 else "over_"
+            ),
+        ),
+    )
