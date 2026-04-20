@@ -138,6 +138,81 @@ class MbaStrategy(FlowStrategy):
         return dict(n.render_context)
 
 
+class MbuStrategy(FlowStrategy):
+    flow = Flow.MBU
+
+    def select_periods(self) -> list[tuple[date, date]]:
+        from robot_framework.sub_process.mbu import get_period  # local import
+        return [get_period()]
+
+    def find_people(self, start_date: date, end_date: date) -> list[Supervisor]:
+        from robot_framework.sub_process.mbu import get_people  # local import
+        return get_people(start_date, end_date)
+
+    def plan_notifications(self, supervisors: Iterable[Supervisor]) -> list[Notification]:
+        notifications: list[Notification] = []
+        for s in supervisors:
+            # Supervisor email: one per supervisor with list of employee strings
+            employees_strings = [e.to_mail_string() for e in s.employees]
+            notifications.append(
+                Notification(
+                    flow=self.flow,
+                    recipient=Recipient(
+                        audience=Audience.SUPERVISOR,
+                        channel=Channel.EMAIL,
+                        address=s.email,
+                    ),
+                    template_id="mbu_supervisor_email",
+                    render_context={
+                        "name": s.name,
+                        "email": s.email,
+                        "employees": employees_strings,
+                    },
+                    reference=f"{s.email}",
+                    queue_name=getattr(config, "MBU_QUEUE_SUPERVISOR"),
+                )
+            )
+            # Employee digital post: one per employee
+            for e in s.employees:
+                notifications.append(
+                    Notification(
+                        flow=self.flow,
+                        recipient=Recipient(
+                            audience=Audience.EMPLOYEE,
+                            channel=Channel.DIGITAL_POST,
+                            address=e.cpr,
+                        ),
+                        template_id="mbu_employee_digital_post",
+                        render_context={
+                            "cpr": e.cpr,
+                            "name": e.name,
+                            "email": e.email,
+                        },
+                        reference=e.cpr,
+                        queue_name=getattr(config, "MBU_QUEUE_EMPLOYEE"),
+                    )
+                )
+        return notifications
+
+    def serialize(self, n: Notification) -> dict:
+        # Preserve existing MBU queue payload shapes
+        if n.queue_name == getattr(config, "MBU_QUEUE_SUPERVISOR"):
+            # Matches Supervisor.to_dict() structure (employees as strings)
+            return {
+                "name": n.render_context.get("name"),
+                "email": n.render_context.get("email"),
+                "employees": list(n.render_context.get("employees", [])),
+            }
+        if n.queue_name == getattr(config, "MBU_QUEUE_EMPLOYEE"):
+            # Matches Employee.to_dict() structure
+            return {
+                "cpr": n.render_context.get("cpr"),
+                "name": n.render_context.get("name"),
+                "email": n.render_context.get("email"),
+            }
+        return dict(n.render_context)
+
+
 def known_queues_for(flow: Flow) -> tuple[str, ...]:
     if flow is Flow.MBA:
         return (config.MBA_QUEUE_SUPERVISOR, config.MBA_QUEUE_EMPLOYEE)

@@ -187,28 +187,36 @@ def send_digital_post_to_employee(cpr: str, name: str, kombit_access: KombitAcce
 def append_queue(orchestrator_connection: OrchestratorConnection):
     """Find people who should be notified and add them to the orchestrator queues.
 
+    Uses the MbuStrategy to plan notifications, while preserving existing
+    queue payloads and reference formats (including period date for
+    supervisor references).
+
     Args:
         orchestrator_connection: The connection to orchestrator.
     """
-    start_date, end_date = get_period()
-    supervisors = get_people(start_date, end_date)
+    from robot_framework.sub_process.strategies import MbuStrategy
 
-    for supervisor in supervisors:
-        supervisor_reference = f"{supervisor.email} - {start_date.strftime('%d/%m/%Y')}"
+    strategy = MbuStrategy()
 
-        if not orchestrator_connection.get_queue_elements(config.MBU_QUEUE_SUPERVISOR, reference=supervisor_reference):
-            orchestrator_connection.create_queue_element(
-                queue_name=config.MBU_QUEUE_SUPERVISOR,
-                reference=supervisor_reference,
-                data=json.dumps(supervisor.to_dict(), ensure_ascii=False)
-            )
+    for start_date, end_date in strategy.select_periods():
+        supervisors = strategy.find_people(start_date, end_date)
+        notifications = strategy.plan_notifications(supervisors)
 
-        for employee in supervisor.employees:
-            if not orchestrator_connection.get_queue_elements(config.MBU_QUEUE_EMPLOYEE, reference=employee.cpr):
+        for n in notifications:
+            payload = json.dumps(strategy.serialize(n), ensure_ascii=False)
+            queue_name = n.queue_name
+
+            # Preserve historical reference format for supervisors: "<email> - <dd/mm/YYYY>"
+            if queue_name == config.MBU_QUEUE_SUPERVISOR:
+                reference = f"{n.recipient.address} - {start_date.strftime('%d/%m/%Y')}"
+            else:
+                reference = n.reference
+
+            if not orchestrator_connection.get_queue_elements(queue_name, reference=reference):
                 orchestrator_connection.create_queue_element(
-                    queue_name=config.MBU_QUEUE_EMPLOYEE,
-                    reference=employee.cpr,
-                    data=json.dumps(employee.to_dict(), ensure_ascii=False)
+                    queue_name=queue_name,
+                    reference=reference,
+                    data=payload,
                 )
 
 
