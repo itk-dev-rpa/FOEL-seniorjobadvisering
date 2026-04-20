@@ -169,30 +169,39 @@ def send_mails_to_employee(employee: dict):
 def append_queue(orchestrator_connection: OrchestratorConnection):
     """Find people who should be notified and add them to the orchestrator queues.
 
+    Uses the MbaStrategy to plan notifications, while preserving existing
+    queue payloads and reference formats (including period date for
+    supervisor references).
+
     Args:
         orchestrator_connection: The connection to orchestrator.
     """
-    for age in (55, 60, 63, 65, 70):
-        start_date, end_date = get_period(age)
-        supervisors = get_people(start_date, end_date)
+    from robot_framework.sub_process.strategies import MbaStrategy
 
-        for supervisor in supervisors:
-            supervisor_reference = f"{supervisor.email} - {start_date.strftime('%d/%m/%Y')}"
+    strategy = MbaStrategy()
 
-            if not orchestrator_connection.get_queue_elements(config.MBA_QUEUE_SUPERVISOR, reference=supervisor_reference):
+    for start_date, end_date in strategy.select_periods():
+        supervisors = strategy.find_people(start_date, end_date)
+        notifications = strategy.plan_notifications(supervisors)
+
+        for n in notifications:
+            payload = json.dumps(strategy.serialize(n), ensure_ascii=False)
+            queue_name = n.queue_name
+
+            # Preserve historical reference format for supervisors: "<email> - <dd/mm/YYYY>"
+            if queue_name == config.MBA_QUEUE_SUPERVISOR:
+                # n.recipient.address is supervisor email
+                reference = f"{n.recipient.address} - {start_date.strftime('%d/%m/%Y')}"
+            else:
+                # Employees keep CPR as reference
+                reference = n.reference
+
+            if not orchestrator_connection.get_queue_elements(queue_name, reference=reference):
                 orchestrator_connection.create_queue_element(
-                    queue_name=config.MBA_QUEUE_SUPERVISOR,
-                    reference=supervisor_reference,
-                    data=json.dumps(supervisor.to_dict_mba(), ensure_ascii=False)
+                    queue_name=queue_name,
+                    reference=reference,
+                    data=payload,
                 )
-
-            for employee in supervisor.employees:
-                if not orchestrator_connection.get_queue_elements(config.MBA_QUEUE_EMPLOYEE, reference=employee.cpr):
-                    orchestrator_connection.create_queue_element(
-                        queue_name=config.MBA_QUEUE_EMPLOYEE,
-                        reference=employee.cpr,
-                        data=json.dumps(employee.to_dict(), ensure_ascii=False)
-                    )
 
 
 def handle_queue(orchestrator_connection: OrchestratorConnection):
