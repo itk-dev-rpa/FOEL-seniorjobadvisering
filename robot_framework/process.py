@@ -43,7 +43,7 @@ def get_kombit_access(orchestrator_connection: OrchestratorConnection) -> Kombit
     vault_client.auth.approle.login(role_id=vault_auth.username, secret_id=vault_auth.password)
 
     # Get certificate
-    read_response = vault_client.secrets.kv.v2.read_secret_version(mount_point='rpa', path=config.KEYVAULT_PATH, raise_on_deleted_version=True)
+    read_response = vault_client.secrets.kv.v2.read_secret_version(mount_point='rpa_senior', path="senior", raise_on_deleted_version=True)
     certificate = read_response['data']['data']['cert']
 
     # Because KombitAccess requires a file, we save and delete the certificate after we use it

@@ -13,11 +13,10 @@ SCREENSHOT_SENDER = "robot@friend.dk"
 
 # Constant/Credential names
 ERROR_EMAIL = "Error Email"
-KEYVAULT_CREDENTIALS = "Keyvault"
+KEYVAULT_CREDENTIALS = "Keyvault_FØL"
 KEYVAULT_URI = "Keyvault URI"
 
 # Local constants
-KEYVAULT_PATH = "Digital_Post_Senioradvis"  # TODO
 MBU_MAIL_SENDER = "senioradvis@mbu.aarhus.dk"
 MSO_MAIL_SENDER = "senioradvis@mso.aarhus.dk"
 MBA_MAIL_SENDER = "senioradvis@ba.aarhus.dk"

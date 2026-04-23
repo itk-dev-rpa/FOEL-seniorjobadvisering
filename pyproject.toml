@@ -29,3 +29,6 @@ dev = [
   "pylint",
   "flake8"
 ]
+
+[tool.setuptools]
+packages = ["robot_framework"]
