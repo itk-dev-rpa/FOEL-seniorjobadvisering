@@ -13,15 +13,20 @@ SCREENSHOT_SENDER = "robot@friend.dk"
 
 # Constant/Credential names
 ERROR_EMAIL = "Error Email"
+KEYVAULT_CREDENTIALS = "Keyvault_FØL"
+KEYVAULT_URI = "Keyvault URI"
 
+# Local constants
+MBU_MAIL_SENDER = "senioradvis@mbu.aarhus.dk"
+MSO_MAIL_SENDER = "senioradvis@mso.aarhus.dk"
+MBA_MAIL_SENDER = "senioradvis@ba.aarhus.dk"
 
-# Queue specific configs
-# ----------------------
+# Queues
+MBU_QUEUE_EMPLOYEE = "MBU_Senioradvisering_medarbejder"
+MBU_QUEUE_SUPERVISOR = "MBU_Senioradvisering_leder"
 
-# The name of the job queue (if any)
-QUEUE_NAME = None
+MSO_QUEUE_EMPLOYEE = "MSO_Senioradvisering_medarbejder"
+MSO_QUEUE_SUPERVISOR = "MSO_Senioradvisering_leder"
 
-# The limit on how many queue elements to process
-MAX_TASK_COUNT = 100
-
-# ----------------------
+MBA_QUEUE_EMPLOYEE = "MBA_Senioradvisering_medarbejder"
+MBA_QUEUE_SUPERVISOR = "MBA_Senioradvisering_leder"
